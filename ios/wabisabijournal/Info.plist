@@ -30,6 +30,12 @@
           <string>com.anonymous.wabisabijournal</string>
         </array>
       </dict>
+      <dict>
+        <key>CFBundleURLSchemes</key>
+        <array>
+          <string>exp+wabi-sabi-journal</string>
+        </array>
+      </dict>
     </array>
     <key>CFBundleVersion</key>
     <string>1</string>
@@ -70,5 +76,9 @@
     <string>Light</string>
     <key>UIViewControllerBasedStatusBarAppearance</key>
     <false/>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>We need access to your microphone to capture your voice journal entries.</string>
+    <key>NSSpeechRecognitionUsageDescription</key>
+    <string>We need to transcribe your voice for journal entries.</string>
   </dict>
 </plist>
