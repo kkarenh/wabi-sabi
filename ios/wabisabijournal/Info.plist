@@ -76,9 +76,5 @@
     <string>Light</string>
     <key>UIViewControllerBasedStatusBarAppearance</key>
     <false/>
-    <key>NSMicrophoneUsageDescription</key>
-    <string>We need access to your microphone to capture your voice journal entries.</string>
-    <key>NSSpeechRecognitionUsageDescription</key>
-    <string>We need to transcribe your voice for journal entries.</string>
   </dict>
 </plist>
