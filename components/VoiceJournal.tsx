@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, ScrollView, PermissionsAndroid, Platform, Alert } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, ScrollView, PermissionsAndroid, Platform, Alert, NativeModules } from 'react-native';
 import Voice from '@react-native-voice/voice';
 
 export default function VoiceJournal() {
@@ -16,9 +16,19 @@ export default function VoiceJournal() {
   const PAUSE_TOLERANCE_MS = 5000; // 5 seconds pause tolerance
 
   useEffect(() => {
+    let mounted = true;
+
     const initializeVoice = async () => {
       try {
-        // Set up voice recognition listeners
+        // Check if Voice module exists
+        if (!NativeModules.Voice) {
+          throw new Error('Voice module not found');
+        }
+
+        // Destroy any existing instance
+        await Voice.destroy();
+
+        // Set up voice recognition
         Voice.onSpeechStart = onSpeechStartHandler;
         Voice.onSpeechResults = onSpeechResultsHandler;
         Voice.onSpeechEnd = onSpeechEndHandler;
@@ -48,19 +58,24 @@ export default function VoiceJournal() {
           }
         }
         
-        setIsInitialized(true);
+        if (mounted) {
+          setIsInitialized(true);
+        }
       } catch (err: any) {
         console.log('Voice initialization error:', {
           error: err,
           message: err?.message,
         });
-        // Don't show initialization errors to the user
+        if (mounted) {
+          setError('Voice recognition initialization failed. Please restart the app.');
+        }
       }
     };
 
     initializeVoice();
 
     return () => {
+      mounted = false;
       if (noSpeechTimeout) {
         clearTimeout(noSpeechTimeout);
       }
@@ -274,7 +289,12 @@ export default function VoiceJournal() {
 
   const startRecording = async () => {
     if (!isInitialized) {
-      setError('Voice recognition is still initializing. Please try again in a moment.');
+      setError('Voice recognition is still initializing. Please wait a moment and try again.');
+      return;
+    }
+
+    if (!NativeModules.Voice) {
+      setError('Voice module not available. Please restart the app.');
       return;
     }
 
@@ -316,6 +336,18 @@ export default function VoiceJournal() {
     }
 
     try {
+      // Ensure Voice is initialized
+      if (!Voice.isAvailable) {
+        await Voice.destroy();
+        Voice.onSpeechStart = onSpeechStartHandler;
+        Voice.onSpeechResults = onSpeechResultsHandler;
+        Voice.onSpeechEnd = onSpeechEndHandler;
+        Voice.onSpeechError = onSpeechErrorHandler;
+        Voice.onSpeechRecognized = onSpeechRecognizedHandler;
+        Voice.onSpeechPartialResults = onSpeechPartialResultsHandler;
+        Voice.onSpeechVolumeChanged = onSpeechVolumeChangedHandler;
+      }
+
       await Voice.start('en-US');
       setTranscript('');
     } catch (error: any) {
