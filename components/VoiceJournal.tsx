@@ -105,10 +105,15 @@ export default function VoiceJournal() {
     // Start a new pause timeout
     const timeout = setTimeout(async () => {
       if (isRecording) {
-        // Restart recording to keep it going
+        console.log('Pause detected, restarting recording');
         try {
           await Voice.stop();
-          await Voice.start('en-US');
+          // Small delay to ensure clean restart
+          setTimeout(async () => {
+            if (isRecording) {  // Double check we still want to record
+              await Voice.start('en-US');
+            }
+          }, 100);
         } catch (err: any) {
           console.log('Error restarting recording:', err?.message);
         }
@@ -168,8 +173,19 @@ export default function VoiceJournal() {
   };
 
   const onSpeechResultsHandler = (e: any) => {
+    console.log('Speech results received:', {
+      hasValue: Boolean(e?.value),
+      resultCount: e?.value?.length,
+      isRecording
+    });
+    
     if (e?.value && e.value[0]) {
-      setTranscript(e.value[0]);
+      // Append to existing transcript if we're still recording
+      if (isRecording) {
+        setTranscript(prev => prev ? `${prev} ${e.value[0]}` : e.value[0]);
+      } else {
+        setTranscript(e.value[0]);
+      }
       setError('');
       setPartialResults([]);
       resetRecording(); // Reset the pause timeout when we get results
@@ -177,8 +193,10 @@ export default function VoiceJournal() {
   };
 
   const onSpeechEndHandler = () => {
-    // Don't immediately stop recording, wait for pause timeout
+    console.log('Speech end detected');
+    // Only stop recording if we're not within our pause tolerance window
     if (!pauseTimeout) {
+      console.log('No active pause timeout, stopping recording');
       setIsRecording(false);
       
       // If we have partial results but no final results, use the last partial result
@@ -186,6 +204,8 @@ export default function VoiceJournal() {
         setTranscript(partialResults[partialResults.length - 1]);
         setPartialResults([]);
       }
+    } else {
+      console.log('Within pause tolerance window, continuing recording');
     }
   };
 
@@ -359,7 +379,7 @@ export default function VoiceJournal() {
             <View style={[styles.volumeBar, { width: `${Math.max((volume + 2) * 25, 0)}%` }]} />
           </View>
         )}
-        {partialResults.length > 0 && (
+        {!transcript && partialResults.length > 0 && (
           <Text style={styles.partialText}>
             {partialResults[partialResults.length - 1]}
           </Text>
@@ -386,7 +406,7 @@ const styles = StyleSheet.create({
   micButton: {
     width: 80, height: 80, borderRadius: 40, backgroundColor: '#766E62', justifyContent: 'center', alignItems: 'center', marginBottom: 16,
   },
-  micButtonRecording: { backgroundColor: '#D64045' },
+  micButtonRecording: { backgroundColor: '#9B6A6C' },
   micButtonText: { color: '#fff', fontSize: 24 },
   recordingStatus: { color: '#766E62', fontSize: 16, marginBottom: 8 },
   volumeIndicator: {
@@ -399,11 +419,11 @@ const styles = StyleSheet.create({
   },
   volumeBar: {
     height: '100%',
-    backgroundColor: '#4CAF50',
+    backgroundColor: '#8B9D77',
     borderRadius: 2,
   },
   errorText: { 
-    color: '#D64045', 
+    color: '#9B6A6C', 
     fontSize: 14, 
     textAlign: 'center', 
     marginTop: 8,
