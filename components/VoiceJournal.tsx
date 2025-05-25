@@ -1,54 +1,296 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, ScrollView, PermissionsAndroid, Platform } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, ScrollView, PermissionsAndroid, Platform, Alert } from 'react-native';
 import Voice from '@react-native-voice/voice';
 
 export default function VoiceJournal() {
   const [isRecording, setIsRecording] = useState(false);
   const [transcript, setTranscript] = useState('');
+  const [error, setError] = useState('');
+  const [isConnected, setIsConnected] = useState(true);
+  const [partialResults, setPartialResults] = useState<string[]>([]);
+  const [volume, setVolume] = useState(-1);
+  const [isSpeechDetected, setIsSpeechDetected] = useState(false);
+  const [noSpeechTimeout, setNoSpeechTimeout] = useState<NodeJS.Timeout | null>(null);
+  const [isInitialized, setIsInitialized] = useState(false);
+  const [pauseTimeout, setPauseTimeout] = useState<NodeJS.Timeout | null>(null);
+  const PAUSE_TOLERANCE_MS = 5000; // 5 seconds pause tolerance
 
   useEffect(() => {
-    Voice.onSpeechStart = onSpeechStartHandler;
-    Voice.onSpeechResults = onSpeechResultsHandler;
-    Voice.onSpeechEnd = onSpeechEndHandler;
-    Voice.onSpeechError = onSpeechErrorHandler;
+    const initializeVoice = async () => {
+      try {
+        // Set up voice recognition listeners
+        Voice.onSpeechStart = onSpeechStartHandler;
+        Voice.onSpeechResults = onSpeechResultsHandler;
+        Voice.onSpeechEnd = onSpeechEndHandler;
+        Voice.onSpeechError = onSpeechErrorHandler;
+        Voice.onSpeechRecognized = onSpeechRecognizedHandler;
+        Voice.onSpeechPartialResults = onSpeechPartialResultsHandler;
+        Voice.onSpeechVolumeChanged = onSpeechVolumeChangedHandler;
+
+        // Check network if on Android
+        if (Platform.OS === 'android') {
+          await checkNetworkConnection();
+          
+          // Pre-request microphone permission
+          const granted = await PermissionsAndroid.request(
+            PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
+            {
+              title: 'Microphone Permission',
+              message: 'App needs access to your microphone to record your voice.',
+              buttonNeutral: 'Ask Me Later',
+              buttonNegative: 'Cancel',
+              buttonPositive: 'OK',
+            }
+          );
+          
+          if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
+            console.log('Microphone permission denied during initialization');
+          }
+        }
+        
+        setIsInitialized(true);
+      } catch (err: any) {
+        console.log('Voice initialization error:', {
+          error: err,
+          message: err?.message,
+        });
+        // Don't show initialization errors to the user
+      }
+    };
+
+    initializeVoice();
 
     return () => {
+      if (noSpeechTimeout) {
+        clearTimeout(noSpeechTimeout);
+      }
+      if (pauseTimeout) {
+        clearTimeout(pauseTimeout);
+      }
       Voice.destroy().then(Voice.removeAllListeners);
     };
   }, []);
 
-  const onSpeechStartHandler = (e: any) => {
+  // Monitor volume levels and show warning if too low
+  useEffect(() => {
+    if (isRecording && volume < -1) {
+      const timeout = setTimeout(() => {
+        if (volume < -1 && !isSpeechDetected && isRecording) {
+          setError('Voice volume is too low. Try speaking louder or moving closer to the microphone.');
+        }
+      }, 2000);
+      
+      return () => clearTimeout(timeout);
+    }
+  }, [isRecording, volume, isSpeechDetected]);
+
+  const checkNetworkConnection = async () => {
+    try {
+      const response = await fetch('https://www.google.com');
+      const connected = response.status === 200;
+      setIsConnected(connected);
+    } catch (err: any) {
+      console.log('Network check error:', {
+        error: err,
+        message: err?.message,
+      });
+      setIsConnected(false);
+    }
+  };
+
+  const resetRecording = () => {
+    if (pauseTimeout) {
+      clearTimeout(pauseTimeout);
+    }
+    // Start a new pause timeout
+    const timeout = setTimeout(async () => {
+      if (isRecording) {
+        // Restart recording to keep it going
+        try {
+          await Voice.stop();
+          await Voice.start('en-US');
+        } catch (err: any) {
+          console.log('Error restarting recording:', err?.message);
+        }
+      }
+    }, PAUSE_TOLERANCE_MS);
+    setPauseTimeout(timeout);
+  };
+
+  const onSpeechVolumeChangedHandler = (e: any) => {
+    const newVolume = e?.value ?? -1;
+    setVolume(newVolume);
+    
+    // Consider speech detected if volume is above threshold
+    if (newVolume > -1) {
+      setIsSpeechDetected(true);
+      setError(''); // Clear any volume-related errors
+      resetRecording(); // Reset the recording timeout
+      
+      // Reset the no-speech timeout
+      if (noSpeechTimeout) {
+        clearTimeout(noSpeechTimeout);
+      }
+      const timeout = setTimeout(() => {
+        setIsSpeechDetected(false);
+      }, 1000);
+      setNoSpeechTimeout(timeout);
+    }
+  };
+
+  const onSpeechPartialResultsHandler = (e: any) => {
+    console.log('Partial results:', {
+      results: e?.value,
+      time: new Date().toISOString(),
+      hasValue: Boolean(e?.value),
+      resultCount: e?.value?.length
+    });
+    if (e?.value) {
+      setPartialResults(e.value);
+    }
+  };
+
+  const onSpeechRecognizedHandler = (e: any) => {
+    console.log('Speech recognized event:', {
+      event: e,
+      time: new Date().toISOString(),
+      isRecording,
+      hasPartialResults: partialResults.length > 0
+    });
+    setError('');
+  };
+
+  const onSpeechStartHandler = () => {
     setIsRecording(true);
+    setError('');
+    setPartialResults([]);
+    resetRecording(); // Start the pause timeout
   };
 
   const onSpeechResultsHandler = (e: any) => {
-    setTranscript(e.value[0]);
+    if (e?.value && e.value[0]) {
+      setTranscript(e.value[0]);
+      setError('');
+      setPartialResults([]);
+      resetRecording(); // Reset the pause timeout when we get results
+    }
   };
 
   const onSpeechEndHandler = () => {
-    setIsRecording(false);
+    // Don't immediately stop recording, wait for pause timeout
+    if (!pauseTimeout) {
+      setIsRecording(false);
+      
+      // If we have partial results but no final results, use the last partial result
+      if (partialResults.length > 0 && !transcript) {
+        setTranscript(partialResults[partialResults.length - 1]);
+        setPartialResults([]);
+      }
+    }
   };
 
   const onSpeechErrorHandler = (e: any) => {
-    console.error(e.error);
+    // Don't show errors if we're not actually trying to record
+    if (!isRecording) return;
+    
     setIsRecording(false);
+    
+    if (Platform.OS === 'android') {
+      if (!isConnected) {
+        setError('Please check your internet connection and try again.');
+        return;
+      }
+
+      switch (e?.error?.code) {
+        case '7':
+          // If we have partial results, use them instead of showing an error
+          if (partialResults.length > 0) {
+            setTranscript(partialResults[partialResults.length - 1]);
+            setPartialResults([]);
+            setError('');
+          } else {
+            setError('No speech detected. Try speaking louder and closer to the microphone.');
+          }
+          break;
+        case '11':
+        case '13':
+          setError("Couldn't understand. Try speaking at a normal pace in a quiet environment.");
+          break;
+        case '5':
+          setError('Speech service unavailable. Please check your internet connection and try again.');
+          break;
+        case '6':
+          setError('Speech service error. Please try again in a moment.');
+          break;
+        case '1':
+        case '2':
+        case '3':
+          setError('Network or server error. Please check your connection and try again.');
+          break;
+        default:
+          setError(`Recognition error (${e?.error?.code}). Please try again.`);
+      }
+    } else {
+      // iOS error handling
+      switch (e?.error?.code) {
+        case '7':
+          if (partialResults.length > 0) {
+            setTranscript(partialResults[partialResults.length - 1]);
+            setPartialResults([]);
+            setError('');
+          } else {
+            setError('No speech was detected. Please try again.');
+          }
+          break;
+        case '11':
+        case '13':
+          setError("I couldn't understand that. Please try again.");
+          break;
+        default:
+          setError('Something went wrong. Please try again.');
+      }
+    }
   };
 
   const startRecording = async () => {
+    if (!isInitialized) {
+      setError('Voice recognition is still initializing. Please try again in a moment.');
+      return;
+    }
+
+    setError('');
+    setPartialResults([]);
+    
     if (Platform.OS === 'android') {
-      // Request permission on Android
-      const granted = await PermissionsAndroid.request(
-        PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
-        {
-          title: 'Microphone Permission',
-          message: 'App needs access to your microphone to record your voice.',
-          buttonNeutral: 'Ask Me Later',
-          buttonNegative: 'Cancel',
-          buttonPositive: 'OK',
+      // Check network connectivity first
+      await checkNetworkConnection();
+      if (!isConnected) {
+        setError('Please check your internet connection before starting.');
+        return;
+      }
+
+      // Check microphone permission
+      try {
+        const granted = await PermissionsAndroid.request(
+          PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
+          {
+            title: 'Microphone Permission',
+            message: 'App needs access to your microphone to record your voice.',
+            buttonNeutral: 'Ask Me Later',
+            buttonNegative: 'Cancel',
+            buttonPositive: 'OK',
+          }
+        );
+        if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
+          setError('Microphone permission is required to record voice.');
+          return;
         }
-      );
-      if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
-        console.log('Microphone permission denied');
+      } catch (err: any) {
+        console.log('Error requesting microphone permission:', {
+          error: err,
+          message: err?.message,
+        });
+        setError('Error requesting microphone permission.');
         return;
       }
     }
@@ -56,17 +298,35 @@ export default function VoiceJournal() {
     try {
       await Voice.start('en-US');
       setTranscript('');
-    } catch (error) {
-      console.error(error);
+    } catch (error: any) {
+      console.error('Start recording error:', {
+        error,
+        message: error?.message,
+      });
+      if (Platform.OS === 'android') {
+        setError('Failed to start recording. Please check your internet connection and try again.');
+      } else {
+        setError('Failed to start recording. Please try again.');
+      }
     }
   };
 
   const stopRecording = async () => {
+    // Clear any pending pause timeouts
+    if (pauseTimeout) {
+      clearTimeout(pauseTimeout);
+      setPauseTimeout(null);
+    }
+    
     try {
       await Voice.stop();
       setIsRecording(false);
-    } catch (error) {
-      console.error(error);
+    } catch (error: any) {
+      console.error('Stop recording error:', {
+        error,
+        message: error?.message,
+      });
+      setError('Failed to stop recording. Please try again.');
     }
   };
 
@@ -83,7 +343,10 @@ export default function VoiceJournal() {
       <Text style={styles.prompt}>Speak your thoughts freely and naturally...</Text>
       <View style={styles.recordingContainer}>
         <TouchableOpacity
-          style={[styles.micButton, isRecording && styles.micButtonRecording]}
+          style={[
+            styles.micButton,
+            isRecording && styles.micButtonRecording
+          ]}
           onPress={toggleRecording}
         >
           <Text style={styles.micButtonText}>{isRecording ? '■' : '●'}</Text>
@@ -91,6 +354,17 @@ export default function VoiceJournal() {
         <Text style={styles.recordingStatus}>
           {isRecording ? 'Recording...' : 'Tap to start recording'}
         </Text>
+        {isRecording && (
+          <View style={styles.volumeIndicator}>
+            <View style={[styles.volumeBar, { width: `${Math.max((volume + 2) * 25, 0)}%` }]} />
+          </View>
+        )}
+        {partialResults.length > 0 && (
+          <Text style={styles.partialText}>
+            {partialResults[partialResults.length - 1]}
+          </Text>
+        )}
+        {error ? <Text style={styles.errorText}>{error}</Text> : null}
       </View>
 
       {transcript ? (
@@ -114,7 +388,36 @@ const styles = StyleSheet.create({
   },
   micButtonRecording: { backgroundColor: '#D64045' },
   micButtonText: { color: '#fff', fontSize: 24 },
-  recordingStatus: { color: '#766E62', fontSize: 16 },
+  recordingStatus: { color: '#766E62', fontSize: 16, marginBottom: 8 },
+  volumeIndicator: {
+    width: '80%',
+    height: 4,
+    backgroundColor: '#E5E0D5',
+    borderRadius: 2,
+    marginVertical: 8,
+    overflow: 'hidden',
+  },
+  volumeBar: {
+    height: '100%',
+    backgroundColor: '#4CAF50',
+    borderRadius: 2,
+  },
+  errorText: { 
+    color: '#D64045', 
+    fontSize: 14, 
+    textAlign: 'center', 
+    marginTop: 8,
+    maxWidth: '80%',
+    lineHeight: 20
+  },
+  partialText: {
+    color: '#766E62',
+    fontSize: 14,
+    textAlign: 'center',
+    fontStyle: 'italic',
+    marginTop: 8,
+    marginBottom: 8,
+  },
   transcriptContainer: { marginTop: 20 },
   transcriptLabel: { fontSize: 14, color: '#766E62', marginBottom: 8, letterSpacing: 1 },
   transcriptCard: {
